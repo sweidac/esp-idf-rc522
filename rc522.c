@@ -20,7 +20,7 @@ struct rc522 {
     spi_device_handle_t spi;
     TaskHandle_t task_handle;
     bool scan_started;
-    bool tag_was_present_last_time;
+    uint8_t* lastSerialNumber;
 };
 
 typedef struct rc522* rc522_handle_t;
@@ -444,6 +444,24 @@ void rc522_destroy() {
     hndl = NULL;
 }
 
+static bool isSameSerialNumber(uint8_t* one, uint8_t* other) {
+    if (one == NULL && other == NULL) {
+        return true;
+    }
+
+    if (one == NULL || other == NULL) {
+        // the XOR-case because of the if-clause before
+        return false;
+    }
+
+    return one[0] == other[0]
+        && one[1] == other[1]
+        && one[2] == other[2]
+        && one[3] == other[3]
+        && one[4] == other[4]
+        && one[5] == other[5];
+}
+
 static void rc522_task(void* arg) {
     while(hndl->running) {
         if(!hndl->scan_started) {
@@ -453,19 +471,28 @@ static void rc522_task(void* arg) {
 
         uint8_t* serial_no = rc522_get_tag();
 
-        if(serial_no && ! hndl->tag_was_present_last_time) {
+        if(! isSameSerialNumber(serial_no, hndl->lastSerialNumber)) {
             rc522_tag_callback_t cb = hndl->config->callback;
-            if(cb) { cb(serial_no); }
-        }
-        
-        if((hndl->tag_was_present_last_time = (serial_no != NULL))) {
-            free(serial_no);
-            serial_no = NULL;
+
+            if (serial_no == NULL) {
+                free(hndl->lastSerialNumber);
+                hndl->lastSerialNumber = NULL;
+            } else {
+                hndl->lastSerialNumber = malloc(sizeof(uint8_t) * 5);
+                memcpy(hndl->lastSerialNumber, serial_no, sizeof(uint8_t) * 5);
+            }
+
+            if(cb) {
+                cb(serial_no);
+            }
         }
 
         int delay_interval_ms = hndl->config->scan_interval_ms;
 
-        if(hndl->tag_was_present_last_time) {
+        if(serial_no != NULL) {
+            free(serial_no);
+            serial_no = NULL;
+
             delay_interval_ms *= 2; // extra scan-bursting prevention
         }
 
